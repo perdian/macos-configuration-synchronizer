@@ -1,0 +1,108 @@
+#!/bin/zsh
+
+if [[ ${MACOS_CONSYN_SHARED_DIRECTORY} == "" ]]; then
+  echo "No 'MACOS_CONSYN_SHARED_DIRECTORY' environment variable available that specifies the shared directory of all configuration files" 1>&2
+  exit 1
+fi
+
+declare -r consyn_shared_directory="${MACOS_CONSYN_SHARED_DIRECTORY}"
+declare -r consyn_root_directory="$(realpath ${0:a:h}/../)"
+declare -r consyn_data_directory_default="${consyn_root_directory}/data"
+declare -r consyn_data_directory="${MACOS_CONSYN_DATA_DIRECTORY:-${consyn_data_directory_default}}"
+declare -r consyn_backup_directory_default="${consyn_data_directory}/backup"
+declare -r consyn_backup_directory="${MACOS_CONSYN_BACKUP_DIRECTORY:-${consyn_data_directory}/backup}"
+declare -r consyn_applications_directory_default="${consyn_data_directory}/applications-enabled"
+declare -r consyn_applications_directory="${MACOS_CONSYN_APPLICATIONS_DIRECTORY:-${consyn_applications_directory_default}}"
+declare -r mackup_repository_location="https://github.com/lra/mackup.git"
+declare -r mackup_repository_directory="${consyn_data_directory}/mackup"
+
+echo "Shared directory:       ${consyn_shared_directory}"
+echo "Backup directory:       ${consyn_backup_directory}"
+echo "Applications directory: ${consyn_applications_directory}"
+echo  ""
+
+consyn_refresh() {
+  echo "Updating configuration repository"
+  if [[ -d "${mackup_repository_directory}" ]]; then
+    git -C "${mackup_repository_directory}" pull
+  else
+    mkdir -p "${mackup_repository_directory}"
+    git clone ${mackup_repository_location} "${mackup_repository_directory}"
+  fi
+}
+
+consyn_install_application_files() {
+  echo "- Application: ${1}"
+  echo "- Files: ${*:2}"
+}
+
+consyn_install_application() {
+
+  echo "\nProcessing application configuration: ${1##*/}"
+  local consyn_application_name
+  local -a consyn_application_files
+  local -r config_file_block_pattern='^\[(.*)\]$'
+  local config_file_block
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    local trimmed_line="${line#"${line%%[![:space:]]*}"}"
+    if [[ "${line}" == '' ]]; then
+      # Ignore empty line
+    elif [[ "${line}" =~ '^\#.*$' ]]; then
+      # Ignore comment line
+    elif [[ "${line}" =~ ${config_file_block_pattern} ]]; then
+      config_file_block="${match[1]}"
+    else
+      case ${config_file_block} in
+        (application)
+          if [[ "${line}" =~ '^name = (.*)$' ]]; then
+            consyn_application_name="${match[1]}"
+          fi
+          ;;
+        (configuration_files)
+          consyn_application_files+=(${line})
+          ;;
+      esac
+    fi
+  done < "$1"
+
+  if [[ ${consyn_application_name} == "" ]]; then
+    echo "- Could no extract name for application from file at: ${1}"
+  elif [[ ${#consyn_application_files[@]} -le 0 ]]; then
+    echo "- Found no application files for application '${consyn_application_name}'"
+  else
+    echo "- Found ${#consyn_application_files[@]} application files for application '${consyn_application_name}'"
+    consyn_install_application_files "${consyn_application_name}" ${consyn_application_files}
+  fi
+
+}
+
+consyn_install() {
+  mkdir -p ${consyn_applications_directory}
+  echo "Collecting configuration files for applications starting in directory: ${consyn_applications_directory}..."
+  local consyn_applications_files=("${consyn_applications_directory}"/**/*(ND-))
+  echo "Found configuration files for ${#consyn_applications_files[@]} applications"
+  if [[ ${#consyn_applications_files[@]} -gt 0 ]]; then
+    for consyn_application_file in ${consyn_applications_files}; do
+      consyn_install_application "${consyn_application_file}"
+    done
+  fi
+}
+
+consyn_uninstall() {
+}
+
+case $1 in
+  (install)
+    consyn_install
+    ;;
+  (uninstall)
+    consyn_install
+    ;;
+  refresh)
+    consyn_refresh
+    ;;
+  (*)
+    echo "Invalid consyn command: $1" 1>&2
+    exit 1
+    ;;
+esac
